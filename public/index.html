@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>מבזקון – התראות מבזקים חכמות ללא כפילויות</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#1e3a8a">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="מבזקון">
+  <link rel="icon" type="image/png" href="/icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Assistant', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      font-family: 'Assistant', sans-serif;
+    }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.15); opacity: 0.4; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+    .pulse-ring {
+      animation: pulse-ring 2s infinite ease-in-out;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen selection:bg-blue-600 selection:text-white pb-16">
+
+  <!-- ניווט עליון -->
+  <header class="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur sticky top-0 z-40">
+    <div class="max-w-6xl mx-auto px-4 py-4 flex flex-wrap items-center justify-between gap-4">
+      
+      <!-- לוגו וכותרת -->
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-xl shadow-lg shadow-blue-500/25">
+          🔔
+        </div>
+        <div>
+          <h1 class="text-xl md:text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-l from-white via-slate-200 to-blue-400">
+            מבזקון – התראות מבזקים חכמות
+          </h1>
+          <p class="text-xs text-slate-400">
+            התראה אחת בלבד לכל אירוע חדשותי – מאחד את כל ערוצי המבזקים בישראל
+          </p>
+        </div>
+      </div>
+
+      <!-- כפתורי בקרה מהירה -->
+      <div class="flex items-center gap-2.5 flex-wrap">
+        <button id="pollBtn" onclick="triggerManualPoll()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700/80 text-slate-200 text-xs px-3 py-2 rounded-xl transition flex items-center gap-1.5 shadow-sm">
+          <span id="pollIcon">🔄</span>
+          <span>סרוק כעת</span>
+        </button>
+
+        <button id="soundToggleBtn" onclick="toggleSound()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700/80 text-slate-200 text-xs px-3 py-2 rounded-xl transition flex items-center gap-1.5 shadow-sm">
+          <span id="soundIcon">🔊</span>
+          <span id="soundText">צליל פעיל</span>
+        </button>
+
+        <button onclick="openMobileModal()" class="bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 text-xs px-3 py-2 rounded-xl transition flex items-center gap-1.5 shadow-sm">
+          <span>📱</span>
+          <span>חיבור מהסמארטפון</span>
+        </button>
+
+        <button id="notifyBtn" onclick="toggleNotifications()" class="bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs px-3.5 py-2 rounded-xl transition flex items-center gap-2 shadow-lg shadow-blue-600/20">
+          <span id="notifyIcon">🔔</span>
+          <span id="notifyText">הפעל התראות דסקטופ</span>
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <div class="max-w-6xl mx-auto px-4 pt-6 space-y-6">
+
+    <!-- סרגל סטטיסטיקה וניטור חי -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="bg-slate-900/90 border border-slate-800/80 p-4 rounded-2xl">
+        <div class="text-xs text-slate-400 mb-1">אירועים ייחודיים</div>
+        <div id="statEventsCount" class="text-2xl font-bold text-white">0</div>
+        <div class="text-[11px] text-slate-500 mt-1">אשכולות עצמאיים</div>
+      </div>
+
+      <div class="bg-slate-900/90 border border-slate-800/80 p-4 rounded-2xl">
+        <div class="text-xs text-slate-400 mb-1">כפילויות שנמנעו 🛡️</div>
+        <div id="statDedupedCount" class="text-2xl font-bold text-emerald-400">0</div>
+        <div class="text-[11px] text-slate-500 mt-1">התראות ספאם שנחסכו</div>
+      </div>
+
+      <div class="bg-slate-900/90 border border-slate-800/80 p-4 rounded-2xl">
+        <div class="text-xs text-slate-400 mb-1">מבזקים שנסרקו</div>
+        <div id="statScannedCount" class="text-2xl font-bold text-blue-400">0</div>
+        <div class="text-[11px] text-slate-500 mt-1">מ-7 מקורות ישראליים</div>
+      </div>
+
+      <div class="bg-slate-900/90 border border-slate-800/80 p-4 rounded-2xl flex flex-col justify-between">
+        <div>
+          <div class="text-xs text-slate-400 mb-1">סטטוס ניטור בזמן אמת</div>
+          <div id="statusText" class="text-sm font-semibold text-emerald-400 flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 pulse-ring"></span> מנטר באופן רציף
+          </div>
+        </div>
+        <div id="lastPollTimeText" class="text-[11px] text-slate-500 mt-2">סריקה אחרונה: טוען...</div>
+      </div>
+    </div>
+
+    <!-- כרטיסיית נושאי מעקב -->
+    <section class="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-5 shadow-sm">
+      <div class="flex items-center justify-between mb-3.5">
+        <div class="flex items-center gap-2">
+          <span class="text-base">🎯</span>
+          <h2 class="text-base font-bold text-slate-200">נושאים במעקב</h2>
+          <span class="text-xs text-slate-500">(לחץ להפעלה / כיבוי של נושא)</span>
+        </div>
+        <button onclick="toggleTopicForm()" class="text-xs text-blue-400 hover:text-blue-300 font-medium transition flex items-center gap-1">
+          <span>➕</span> הוסף נושא חדש
+        </button>
+      </div>
+
+      <!-- רשימת נושאים -->
+      <div id="topicsContainer" class="flex flex-wrap gap-2"></div>
+
+      <!-- טופס הוספת נושא (מוסתר כברירת מחדל) -->
+      <form id="addTopicForm" onsubmit="handleCreateTopic(event)" class="hidden mt-4 pt-4 border-t border-slate-800 flex flex-col sm:flex-row gap-2">
+        <input id="newTopicTitle" required placeholder="שם הנושא (למשל: סוריה או רעידת אדמה)" class="bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2 text-sm flex-1 outline-none focus:border-blue-500 text-slate-100 placeholder-slate-500">
+        <input id="newTopicKeywords" required placeholder="מילות מפתח מופרדות בפסיקים (דמשק, אסד, תקיפה)" class="bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2 text-sm flex-1 outline-none focus:border-blue-500 text-slate-100 placeholder-slate-500">
+        <button type="submit" class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-5 py-2 rounded-xl transition">
+          שמור נושא
+        </button>
+      </form>
+    </section>
+
+    <!-- סרגל סינון וחיפוש -->
+    <div class="flex flex-col sm:flex-row items-center justify-between gap-3">
+      <div class="flex items-center gap-3 w-full sm:w-auto flex-wrap">
+        <div class="flex items-center gap-1.5">
+          <span class="text-xs text-slate-400 font-medium">סנן:</span>
+          <select id="filterTopicSelect" onchange="applyFilters()" class="bg-slate-900 border border-slate-800 text-slate-200 text-xs rounded-xl px-3 py-2 outline-none focus:border-blue-500">
+            <option value="all">כל הנושאים</option>
+          </select>
+        </div>
+
+        <div class="flex items-center gap-1.5">
+          <span class="text-xs text-slate-400 font-medium">מיון לפי זמן:</span>
+          <select id="sortOrderSelect" onchange="changeSortOrder()" class="bg-slate-900 border border-slate-800 text-slate-200 text-xs rounded-xl px-3 py-2 outline-none focus:border-blue-500">
+            <option value="desc">⬇️ מהחדש לישן (ברירת מחדל)</option>
+            <option value="asc">⬆️ מהישן לחדש</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 w-full sm:w-auto">
+        <div class="relative flex-1 sm:w-64">
+          <input id="searchInput" oninput="applyFilters()" type="text" placeholder="חיפוש חופשי בידיעות..." class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 pl-8 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-blue-500">
+          <span class="absolute left-2.5 top-2 text-slate-500 text-xs">🔍</span>
+        </div>
+        <button onclick="clearAllEvents()" title="נקה היסטוריית אירועים" class="bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-rose-400 text-xs px-2.5 py-1.5 rounded-xl transition">
+          🗑️ נקה
+        </button>
+      </div>
+    </div>
+
+    <!-- פיד האירועים המקובצים -->
+    <main>
+      <div id="eventsContainer" class="space-y-3.5">
+        <div class="text-center py-16 border border-dashed border-slate-800 rounded-2xl bg-slate-900/40">
+          <div class="text-3xl mb-2">📡</div>
+          <div class="text-slate-300 font-medium mb-1">טוען מבזקים ומנטר אתרים ישראליים...</div>
+          <div class="text-xs text-slate-500">מבזקים חדשים יופיעו כאן ויוקפצו בהתראה אחת בלבד.</div>
+        </div>
+      </div>
+    </main>
+
+  </div>
+
+  <!-- מודל עריכת נושא ומילות מפתח -->
+  <div id="editTopicModal" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <span>✏️</span> עריכת נושא ומילות מפתח
+        </h3>
+        <button onclick="closeEditTopicModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold text-slate-300 mb-1.5">שם הנושא:</label>
+        <input id="editTopicTitle" type="text" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white outline-none focus:border-blue-500">
+      </div>
+
+      <div>
+        <div class="flex items-center justify-between mb-1.5">
+          <label class="block text-xs font-semibold text-slate-300">כל מילות המפתח המוגדרות כרגע:</label>
+          <span id="keywordCountBadge" class="text-[11px] text-blue-400 font-bold">0 מילים</span>
+        </div>
+        <p class="text-[11px] text-slate-500 mb-2">לחץ על ה-&times; ליד מילה כדי למחוק אותה, או הוסף מילות מפתח חדשות למטה.</p>
+        <div id="editKeywordsBadges" class="flex flex-wrap gap-1.5 p-3 bg-slate-950 border border-slate-800 rounded-xl min-h-[90px] max-h-48 overflow-y-auto"></div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold text-slate-300 mb-1.5">הוסף מילות מפתח נוספות:</label>
+        <div class="flex gap-2">
+          <input id="newKeywordInput" placeholder="הקלד מילה (או מספר מילים מופרדות בפסיקים) ולחץ Enter..." onkeydown="if(event.key === 'Enter'){ event.preventDefault(); addKeywordToEditModal(); }" class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white outline-none focus:border-blue-500 placeholder-slate-500">
+          <button type="button" onclick="addKeywordToEditModal()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs px-3.5 py-2 rounded-xl transition font-medium">
+            הוסף
+          </button>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+        <button type="button" onclick="closeEditTopicModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-4 py-2 rounded-xl transition">
+          ביטול
+        </button>
+        <button type="button" onclick="saveEditedTopic()" class="bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs px-4 py-2 rounded-xl transition shadow-lg shadow-blue-600/20">
+          שמור שינויים
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- מודל חיבור מהסמארטפון -->
+  <div id="mobileModal" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <span>📱</span> פתיחת האפליקציה מהסמארטפון
+        </h3>
+        <button onclick="closeMobileModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+
+      <!-- שיטה 1: אותה רשת Wi-Fi -->
+      <div class="bg-slate-950/80 border border-slate-800 p-4 rounded-xl space-y-3">
+        <div class="flex items-center gap-2 text-sm font-semibold text-emerald-400">
+          <span>📶</span> אפשרות 1: כשהנייד מחובר לאותה רשת Wi-Fi ביתית
+        </div>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          סרוק את קוד ה-QR עם מצלמת הסמארטפון או הקלד את הכתובת הבאה בדפדפן הנייד:
+        </p>
+
+        <div class="flex flex-col sm:flex-row items-center gap-4 bg-slate-900 p-3 rounded-xl border border-slate-800">
+          <!-- QR Code Image -->
+          <div class="bg-white p-2 rounded-xl shadow-md flex-shrink-0">
+            <img id="mobileQrCode" src="" alt="QR Code" class="w-32 h-32 block">
+          </div>
+
+          <div class="flex-1 w-full space-y-2 text-center sm:text-right">
+            <div class="text-[11px] text-slate-400">כתובת ישירה ברשת:</div>
+            <div id="mobileDirectUrl" class="text-sm font-mono font-bold text-blue-400 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 break-all select-all">
+              טוען כתובת...
+            </div>
+            <button onclick="copyMobileUrl()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg border border-slate-700 transition">
+              📋 העתק כתובת
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- שיטה 2: גישה מכל מקום בעולם -->
+      <div class="bg-slate-950/80 border border-slate-800 p-4 rounded-xl space-y-2">
+        <div class="flex items-center gap-2 text-sm font-semibold text-indigo-400">
+          <span>🌐</span> אפשרות 2: גישה מכל מקום בעולם (סלולרי 4G/5G ו-HTTPS)
+        </div>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          כדי לגשת לאפליקציה גם מחוץ לבית ולקבל התראות Push בנייד, הרץ בטרמינל בתיקיית הפרויקט:
+        </p>
+        <div class="bg-slate-900 border border-slate-800 text-xs font-mono text-emerald-300 p-2.5 rounded-lg select-all text-left" dir="ltr">
+          npm run tunnel
+        </div>
+        <p class="text-[11px] text-slate-500">
+          הפקודה תיצור עבורך כתובת אינטרנט מאובטחת (<span dir="ltr">https://...localtunnel.me</span>) שניתן לפתוח מכל מכשיר בעולם!
+        </p>
+      </div>
+
+      <div class="flex items-center justify-between pt-3 border-t border-slate-800">
+        <button onclick="sendTestPushNotification()" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3.5 py-2 rounded-xl transition flex items-center gap-1.5 font-medium shadow-sm">
+          <span>🔔</span>
+          <span>שלח התראת בדיקה לסמארטפון</span>
+        </button>
+
+        <button onclick="closeMobileModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-4 py-2 rounded-xl transition">
+          סגור
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

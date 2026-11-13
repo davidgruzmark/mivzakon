@@ -1,0 +1,21 @@
+{
+  "name": "radiant-nobel",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js",
+    "tunnel": "npx --yes localtunnel --port 3000",
+    "test": "node test/deduplicator.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "rss-parser": "^3.13.0",
+    "web-push": "^3.6.7"
+  }
+}
