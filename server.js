@@ -129,6 +129,7 @@ app.get('/api/stats', (req, res) => {
   const stats = poller.getStats();
   res.json({
     ...stats,
+    cloudDbConnected: dbService.isCloudConnected(),
     totalClustersCount: clusters.length,
     totalSourcesReported: clusters.reduce((acc, c) => acc + (c.sources ? c.sources.length : 0), 0)
   });
@@ -187,15 +188,25 @@ app.get('/api/stream', (req, res) => {
   });
 });
 
-// הפעלת השרת והאזנה לכל ממשקי הרשת (0.0.0.0) לגישה מסמארטפונים
-app.listen(PORT, '0.0.0.0', () => {
-  const localIp = getLocalIpAddress();
-  console.log(`\n======================================================`);
-  console.log(`🚀 אפליקציית התראות המבזקים פועלת עם מסד נתונים SQLite!`);
-  console.log(`📁 מיקום מסד הנתונים: data/news.db`);
-  console.log(`💻 במחשב זה:      http://localhost:${PORT}`);
-  console.log(`📱 מהסמארטפון שלך: http://${localIp}:${PORT} (באותה רשת Wi-Fi)`);
-  console.log(`======================================================\n`);
+// הפעלת השרת והאזנה לכל ממשקי הרשת (0.0.0.0) לגישה מסמארטפונים ובענן
+async function startServer() {
+  await dbService.initCloudSync();
+  webPushService.initVapid();
 
-  poller.start();
-});
+  app.listen(PORT, '0.0.0.0', () => {
+    const localIp = getLocalIpAddress();
+    const dbMode = dbService.isCloudConnected()
+      ? '☁️ PostgreSQL בענן + מטמון SQLite מהיר'
+      : '📁 SQLite מקומי (data/news.db)';
+    console.log(`\n======================================================`);
+    console.log(`🚀 אפליקציית התראות המבזקים פועלת!`);
+    console.log(`🗄️ מסד נתונים:     ${dbMode}`);
+    console.log(`💻 במחשב זה:      http://localhost:${PORT}`);
+    console.log(`📱 מהסמארטפון שלך: http://${localIp}:${PORT} (באותה רשת Wi-Fi)`);
+    console.log(`======================================================\n`);
+
+    poller.start();
+  });
+}
+
+startServer();

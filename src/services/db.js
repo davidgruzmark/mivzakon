@@ -1,8 +1,11 @@
 import { DatabaseSync } from 'node:sqlite';
+import pg from 'pg';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { DEFAULT_TOPICS } from '../config/defaultTopics.js';
+
+const { Pool } = pg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,6 +17,8 @@ export class DatabaseService {
   constructor() {
     this.ensureDir();
     this.db = new DatabaseSync(DB_FILE);
+    this.pgPool = null;
+    this.cloudConnected = false;
     this.initSchema();
     this.migrateFromLegacyJson();
   }
@@ -21,6 +26,262 @@ export class DatabaseService {
   ensureDir() {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  }
+
+  isCloudConnected() {
+    return this.cloudConnected;
+  }
+
+  // חיבור וסנכרון מול מסד נתונים בענן (PostgreSQL - Render / Supabase / Neon)
+  async initCloudSync() {
+    const dbUrl = process.env.DATABASE_URL;
+    if (!dbUrl) {
+      console.log('[Database] לא הוגדר DATABASE_URL — פועל על מסד נתונים מקומי (data/news.db).');
+      return false;
+    }
+
+    try {
+      const isLocalPg = dbUrl.includes('localhost') || dbUrl.includes('127.0.0.1');
+      this.pgPool = new Pool({
+        connectionString: dbUrl,
+        ssl: isLocalPg ? false : { rejectUnauthorized: false }
+      });
+
+      await this.pgPool.query(`
+        CREATE TABLE IF NOT EXISTS topics (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          keywords TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          badge_color TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS clusters (
+          id TEXT PRIMARY KEY,
+          topic_id TEXT,
+          topic_title TEXT NOT NULL,
+          title TEXT NOT NULL,
+          summary TEXT,
+          first_reported_at TEXT NOT NULL,
+          last_updated_at TEXT NOT NULL,
+          alert_sent INTEGER DEFAULT 1,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS cluster_sources (
+          id SERIAL PRIMARY KEY,
+          cluster_id TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          url TEXT NOT NULL,
+          source_name TEXT NOT NULL,
+          source_id TEXT NOT NULL,
+          pub_date TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (cluster_id, url)
+        );
+
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+          endpoint TEXT PRIMARY KEY,
+          p256dh TEXT NOT NULL,
+          auth TEXT NOT NULL,
+          user_agent TEXT,
+          subscribed_topics TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      this.cloudConnected = true;
+      console.log('☁️ [Database] מחובר בהצלחה למסד נתונים קבוע בענן (PostgreSQL)!');
+
+      // בדיקה האם יש כבר נתונים בענן
+      const { rows: cloudTopics } = await this.pgPool.query('SELECT * FROM topics ORDER BY created_at ASC');
+      if (cloudTopics.length > 0) {
+        // טעינת כל הנתונים מהענן אל מסד הנתונים המקומי המהיר
+        await this.pullFromCloud();
+        console.log(`☁️ [Database] סונכרנו מהענן: ${cloudTopics.length} נושאים וכל היסטוריית האירועים והמנויים.`);
+      } else {
+        // הענן ריק (הפעלה ראשונה) — דחיפת ברירות המחדל והנתונים הקיימים לענן
+        await this.pushAllToCloud();
+        console.log('☁️ [Database] אתחול ראשוני: נושאי ברירת המחדל וההגדרות נשמרו בענן.');
+      }
+
+      return true;
+    } catch (err) {
+      console.error('⚠️ [Database] שגיאה בחיבור למסד הנתונים בענן (ממשיך עם SQLite מקומי):', err.message);
+      this.cloudConnected = false;
+      return false;
+    }
+  }
+
+  async pullFromCloud() {
+    if (!this.pgPool) return;
+
+    // 1. Topics
+    const { rows: topics } = await this.pgPool.query('SELECT * FROM topics ORDER BY created_at ASC');
+    if (topics.length > 0) {
+      this.db.prepare('DELETE FROM topics').run();
+      const insTopic = this.db.prepare(`
+        INSERT INTO topics (id, title, keywords, enabled, badge_color)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      for (const t of topics) {
+        insTopic.run(t.id, t.title, t.keywords, t.enabled, t.badge_color || '');
+      }
+    }
+
+    // 2. Settings
+    const { rows: settings } = await this.pgPool.query('SELECT * FROM settings');
+    if (settings.length > 0) {
+      const insSetting = this.db.prepare(`
+        INSERT INTO settings (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `);
+      for (const s of settings) {
+        insSetting.run(s.key, s.value);
+      }
+    }
+
+    // 3. Push Subscriptions
+    const { rows: subs } = await this.pgPool.query('SELECT * FROM push_subscriptions');
+    if (subs.length > 0) {
+      this.db.prepare('DELETE FROM push_subscriptions').run();
+      const insSub = this.db.prepare(`
+        INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent, subscribed_topics)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      for (const s of subs) {
+        insSub.run(s.endpoint, s.p256dh, s.auth, s.user_agent || '', s.subscribed_topics || null);
+      }
+    }
+
+    // 4. Clusters & Sources
+    const { rows: clusters } = await this.pgPool.query('SELECT * FROM clusters ORDER BY first_reported_at DESC LIMIT 500');
+    const { rows: sources } = await this.pgPool.query('SELECT * FROM cluster_sources ORDER BY id ASC');
+    if (clusters.length > 0) {
+      this.db.prepare('DELETE FROM cluster_sources').run();
+      this.db.prepare('DELETE FROM clusters').run();
+      const insCluster = this.db.prepare(`
+        INSERT INTO clusters (id, topic_id, topic_title, title, summary, first_reported_at, last_updated_at, alert_sent)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const c of clusters) {
+        insCluster.run(c.id, c.topic_id || '', c.topic_title, c.title, c.summary || '', c.first_reported_at, c.last_updated_at, c.alert_sent ?? 1);
+      }
+
+      const clusterIdSet = new Set(clusters.map(c => c.id));
+      const insSource = this.db.prepare(`
+        INSERT OR IGNORE INTO cluster_sources (cluster_id, title, url, source_name, source_id, pub_date)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      for (const s of sources) {
+        if (clusterIdSet.has(s.cluster_id)) {
+          insSource.run(s.cluster_id, s.title, s.url, s.source_name, s.source_id, s.pub_date);
+        }
+      }
+    }
+  }
+
+  async pushAllToCloud() {
+    if (!this.pgPool) return;
+    const topics = this.getTopics();
+    await this.syncTopicsToCloud(topics);
+
+    const settingsRows = this.db.prepare('SELECT * FROM settings').all();
+    for (const r of settingsRows) {
+      await this.pgPool.query(
+        'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value',
+        [r.key, r.value]
+      );
+    }
+
+    const clusters = this.getClusters();
+    if (clusters.length > 0) {
+      await this.syncClustersToCloud(clusters);
+    }
+  }
+
+  async syncTopicsToCloud(topics) {
+    if (!this.pgPool || !this.cloudConnected) return;
+    try {
+      const ids = topics.map(t => t.id);
+      if (ids.length > 0) {
+        await this.pgPool.query('DELETE FROM topics WHERE NOT (id = ANY($1::text[]))', [ids]);
+      } else {
+        await this.pgPool.query('DELETE FROM topics');
+      }
+      for (const t of topics) {
+        await this.pgPool.query(
+          `INSERT INTO topics (id, title, keywords, enabled, badge_color, updated_at)
+           VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+           ON CONFLICT(id) DO UPDATE SET
+             title = EXCLUDED.title,
+             keywords = EXCLUDED.keywords,
+             enabled = EXCLUDED.enabled,
+             badge_color = EXCLUDED.badge_color,
+             updated_at = CURRENT_TIMESTAMP`,
+          [t.id, t.title, JSON.stringify(t.keywords || []), t.enabled ? 1 : 0, t.badgeColor || '']
+        );
+      }
+    } catch (e) {
+      console.error('[Database Cloud Sync] שגיאה בשמירת נושאים בענן:', e.message);
+    }
+  }
+
+  async syncClustersToCloud(clusters) {
+    if (!this.pgPool || !this.cloudConnected) return;
+    try {
+      for (const c of clusters) {
+        await this.pgPool.query(
+          `INSERT INTO clusters (id, topic_id, topic_title, title, summary, first_reported_at, last_updated_at, alert_sent)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT(id) DO UPDATE SET
+             topic_id = EXCLUDED.topic_id,
+             topic_title = EXCLUDED.topic_title,
+             title = EXCLUDED.title,
+             summary = EXCLUDED.summary,
+             first_reported_at = EXCLUDED.first_reported_at,
+             last_updated_at = EXCLUDED.last_updated_at,
+             alert_sent = EXCLUDED.alert_sent`,
+          [
+            c.id,
+            c.topicId || '',
+            c.topicTitle || '',
+            c.title,
+            c.summary || '',
+            c.firstReportedAt,
+            c.lastUpdatedAt,
+            c.alertSent ? 1 : 0
+          ]
+        );
+
+        if (c.sources && Array.isArray(c.sources)) {
+          for (const s of c.sources) {
+            await this.pgPool.query(
+              `INSERT INTO cluster_sources (cluster_id, title, url, source_name, source_id, pub_date)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT (cluster_id, url) DO NOTHING`,
+              [
+                c.id,
+                s.title || c.title,
+                s.url,
+                s.source || 'לא ידוע',
+                s.sourceId || 'generic',
+                s.pubDate || c.firstReportedAt
+              ]
+            );
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[Database Cloud Sync] שגיאה בשמירת אירועים בענן:', e.message);
     }
   }
 
@@ -162,7 +423,9 @@ export class DatabaseService {
       );
     }
 
-    return this.getTopics();
+    const updated = this.getTopics();
+    this.syncTopicsToCloud(updated);
+    return updated;
   }
 
   // === Clusters & Sources ===
@@ -274,18 +537,29 @@ export class DatabaseService {
       }
     }
 
+    this.syncClustersToCloud(clusters);
     return clusters;
   }
 
   deleteCluster(id) {
     this.db.prepare('DELETE FROM cluster_sources WHERE cluster_id = ?').run(id);
     this.db.prepare('DELETE FROM clusters WHERE id = ?').run(id);
+    if (this.pgPool && this.cloudConnected) {
+      this.pgPool.query('DELETE FROM clusters WHERE id = $1', [id]).catch(e => {
+        console.error('[Database Cloud Sync] שגיאה במחיקת אירוע בענן:', e.message);
+      });
+    }
     return true;
   }
 
   clearAllClusters() {
     this.db.prepare('DELETE FROM cluster_sources').run();
     this.db.prepare('DELETE FROM clusters').run();
+    if (this.pgPool && this.cloudConnected) {
+      this.pgPool.query('DELETE FROM cluster_sources; DELETE FROM clusters;').catch(e => {
+        console.error('[Database Cloud Sync] שגיאה בניקוי אירועים בענן:', e.message);
+      });
+    }
     return true;
   }
 
@@ -314,7 +588,14 @@ export class DatabaseService {
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
     `);
     for (const [k, v] of Object.entries(newSettings)) {
-      upsert.run(k, JSON.stringify(v));
+      const jsonVal = JSON.stringify(v);
+      upsert.run(k, jsonVal);
+      if (this.pgPool && this.cloudConnected) {
+        this.pgPool.query(
+          'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value',
+          [k, jsonVal]
+        ).catch(e => console.error('[Database Cloud Sync] שגיאה בשמירת הגדרות בענן:', e.message));
+      }
     }
     return this.getSettings();
   }
@@ -333,12 +614,33 @@ export class DatabaseService {
     `);
     const topicsJson = subscribedTopics ? JSON.stringify(subscribedTopics) : null;
     upsert.run(sub.endpoint, sub.keys.p256dh, sub.keys.auth, userAgent, topicsJson);
+
+    if (this.pgPool && this.cloudConnected) {
+      this.pgPool.query(
+        `INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent, subscribed_topics, created_at)
+         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+         ON CONFLICT(endpoint) DO UPDATE SET
+           p256dh = EXCLUDED.p256dh,
+           auth = EXCLUDED.auth,
+           user_agent = EXCLUDED.user_agent,
+           subscribed_topics = COALESCE(EXCLUDED.subscribed_topics, push_subscriptions.subscribed_topics)`,
+        [sub.endpoint, sub.keys.p256dh, sub.keys.auth, userAgent, topicsJson]
+      ).catch(e => console.error('[Database Cloud Sync] שגיאה בשמירת מנוי Push בענן:', e.message));
+    }
     return true;
   }
 
   updatePushSubscriptionTopics(endpoint, topics) {
+    const topicsJson = JSON.stringify(topics);
     this.db.prepare('UPDATE push_subscriptions SET subscribed_topics = ? WHERE endpoint = ?')
-      .run(JSON.stringify(topics), endpoint);
+      .run(topicsJson, endpoint);
+
+    if (this.pgPool && this.cloudConnected) {
+      this.pgPool.query(
+        'UPDATE push_subscriptions SET subscribed_topics = $1 WHERE endpoint = $2',
+        [topicsJson, endpoint]
+      ).catch(e => console.error('[Database Cloud Sync] שגיאה בעדכון נושאי Push בענן:', e.message));
+    }
     return true;
   }
 
@@ -358,6 +660,10 @@ export class DatabaseService {
 
   removePushSubscription(endpoint) {
     this.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
+    if (this.pgPool && this.cloudConnected) {
+      this.pgPool.query('DELETE FROM push_subscriptions WHERE endpoint = $1', [endpoint])
+        .catch(e => console.error('[Database Cloud Sync] שגיאה במחיקת מנוי Push בענן:', e.message));
+    }
     return true;
   }
 }

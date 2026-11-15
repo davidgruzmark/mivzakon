@@ -55,7 +55,7 @@ class WebPushService {
 
     console.log(`[WebPush] משדר התראת Push למסכי נעילה של ${targetSubs.length} מכשירים מתאימים...`);
 
-    const promises = subs.map(async (sub) => {
+    const promises = targetSubs.map(async (sub) => {
       try {
         await webpush.sendNotification(sub, payload);
       } catch (err) {
