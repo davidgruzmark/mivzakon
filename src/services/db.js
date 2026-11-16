@@ -43,10 +43,23 @@ export class DatabaseService {
 
     try {
       const isLocalPg = dbUrl.includes('localhost') || dbUrl.includes('127.0.0.1');
-      this.pgPool = new Pool({
+      const createPool = (useSsl) => new Pool({
         connectionString: dbUrl,
-        ssl: isLocalPg ? false : { rejectUnauthorized: false }
+        ssl: useSsl ? { rejectUnauthorized: false } : false
       });
+
+      this.pgPool = createPool(!isLocalPg);
+      try {
+        await this.pgPool.query('SELECT 1');
+      } catch (connErr) {
+        if (!isLocalPg && (connErr.message.includes('SSL') || connErr.message.includes('ssl'))) {
+          console.log('[Database] חיבור עם SSL נכשל, מנסה התחברות ללא SSL (מתאים לרשת הפנימית של Render)...');
+          this.pgPool = createPool(false);
+          await this.pgPool.query('SELECT 1');
+        } else {
+          throw connErr;
+        }
+      }
 
       await this.pgPool.query(`
         CREATE TABLE IF NOT EXISTS topics (
