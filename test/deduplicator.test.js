@@ -2,7 +2,13 @@ import assert from 'node:assert';
 import { NewsDeduplicator } from '../src/services/deduplicator.js';
 import { RssPoller } from '../src/services/rssPoller.js';
 import { dbService } from '../src/services/db.js';
-import { calculateHebrewSimilarity, tokenizeHebrew, getWordStems } from '../src/utils/textProcessor.js';
+import { DEFAULT_TOPICS } from '../src/config/defaultTopics.js';
+import {
+  calculateHebrewSimilarity,
+  tokenizeHebrew,
+  getWordStems,
+  containsHebrewKeyword
+} from '../src/utils/textProcessor.js';
 
 console.log('--- הרצת בדיקות מנוע Deduplication ו-Clustering לעברית ---');
 
@@ -143,9 +149,9 @@ const deduplicator = new NewsDeduplicator({ similarityThreshold: 0.30, timeWindo
 
   const clusters = [];
   let newCalls = 0;
-  pollerInstance.handleIngestedItem(
+  await pollerInstance.handleIngestedItem(
     {
-      title: 'ידיעה ישנה על המלחמה וביטחון',
+      title: 'ידיעה ישנה על פיגוע וביטחון',
       summary: 'דיווח ישן מלפני יותר מיומיים',
       url: 'https://example.com/old-49h',
       source: 'בדיקה',
@@ -153,7 +159,7 @@ const deduplicator = new NewsDeduplicator({ similarityThreshold: 0.30, timeWindo
       pubDate: hours49Ago
     },
     clusters,
-    [{ id: 'security', title: 'ביטחון', keywords: ['ביטחון'], enabled: true }],
+    [{ id: 'security_attacks', title: 'אירועים ביטחוניים', keywords: ['פיגוע'], enabled: true }],
     () => newCalls++,
     () => {}
   );
@@ -171,9 +177,9 @@ const deduplicator = new NewsDeduplicator({ similarityThreshold: 0.30, timeWindo
   dbService.saveClusters([
     {
       id: oldId,
-      topicId: 'test_topic',
-      topicTitle: 'בדיקה',
-      title: 'אירוע בדיקה ישן מעל 48 שעות',
+      topicId: 'security_attacks',
+      topicTitle: 'אירועים ביטחוניים',
+      title: 'פיגוע בדיקה ישן מעל 48 שעות',
       summary: '',
       firstReportedAt: hours50Ago,
       lastUpdatedAt: hours50Ago,
@@ -182,9 +188,9 @@ const deduplicator = new NewsDeduplicator({ similarityThreshold: 0.30, timeWindo
     },
     {
       id: freshId,
-      topicId: 'test_topic',
-      topicTitle: 'בדיקה',
-      title: 'אירוע בדיקה טרי מהשעה האחרונה',
+      topicId: 'security_attacks',
+      topicTitle: 'אירועים ביטחוניים',
+      title: 'פיגוע בדיקה טרי מהשעה האחרונה',
       summary: '',
       firstReportedAt: hours1Ago,
       lastUpdatedAt: hours1Ago,
@@ -206,4 +212,81 @@ const deduplicator = new NewsDeduplicator({ similarityThreshold: 0.30, timeWindo
   console.log('✅ בדיקה 6 עברה: מחיקה אוטומטית מה-DB של אירועים מעל 48 שעות');
 }
 
-console.log('\n🎉 כל 6 בדיקות היחידה עברו בהצלחה מושלמת!');
+// בדיקה 7: התאמה בגבולות מילה וסינון התראות שווא (בורסה, מזג אוויר, רפואה)
+{
+  assert.strictEqual(containsHebrewKeyword('ירידות חדות בבורסה בתל אביב', 'ירי'), false, '"ירי" אסור שיתפוס "ירידות"');
+  assert.strictEqual(containsHebrewKeyword('ירי לעבר הצפון', 'ירי'), true, '"ירי" כמילה עצמאית חייב להיתפס');
+  assert.strictEqual(containsHebrewKeyword('לא ניתן להטיל מצור על איראן', 'טיל'), false, '"טיל" אסור שיתפוס "להטיל"');
+
+  const pollerInstance = new RssPoller();
+  assert.strictEqual(
+    pollerInstance.matchTopic({ title: 'ירידות חדות עם פתיחת המסחר בבורסה', summary: '' }, DEFAULT_TOPICS),
+    null,
+    'ידיעת בורסה אסור שתקבל התראה ביטחונית'
+  );
+  assert.strictEqual(
+    pollerInstance.matchTopic({ title: 'צלחת מעופפת מעל הגולן? לא, זה רק ענן', summary: 'ענני עדשה בצפון רמת הגולן' }, DEFAULT_TOPICS),
+    null,
+    'ידיעת עננים בגולן אסור שתקבל התראת לבנון/צפון'
+  );
+  assert.strictEqual(
+    pollerInstance.matchTopic({ title: 'קיצור תורנויות המתמחים יימשך', summary: 'ממליץ להמשיך במתווה קיצור התורנויות בבתי החולים' }, DEFAULT_TOPICS),
+    null,
+    'מתווה רפואי אסור שיתפוס את נושא עסקת החטופים'
+  );
+  console.log('✅ בדיקה 7 עברה: התאמת גבולות מילה וסינון התראות שווא');
+}
+
+// בדיקה 8: איחוד כותרות אמיתיות בהטיות שונות (קלע דוד + חיסול ב-7 באוקטובר) ובחירת הנושא המדויק ביותר
+{
+  const pollerInstance = new RssPoller();
+  const bestTopic = pollerInstance.matchTopic(
+    {
+      title: 'צה"ל: הותקף אתר ששימש את חיזבאללה לייצור טילים ולאחסון אמל"ח בלבנון',
+      summary: 'תקפנו בעומק לבנון אתר של חיזבאללה'
+    },
+    DEFAULT_TOPICS
+  );
+  assert.strictEqual(bestTopic?.id, 'lebanon', 'דיווח על תקיפת חיזבאללה בלבנון חייב להסתווג תחת לבנון/חיזבאללה');
+
+  const davidClusters = [];
+  const d1 = deduplicator.processItem(davidClusters, {
+    title: 'בעקבות לקחי המלחמה עם איראן: ישראל שדרגה בצורה משמעותית את מערכת "קלע דוד"',
+    url: 'https://walla.co.il/item/1',
+    source: 'וואלה',
+    topicId: 'security_attacks',
+    pubDate: new Date().toISOString()
+  });
+  davidClusters.push(d1.cluster);
+
+  const d2 = deduplicator.processItem(davidClusters, {
+    title: 'דיווח: ישראל ביצעה שדרוג למערכת ההגנה האווירית קלע דוד',
+    url: 'https://ynet.co.il/item/2',
+    source: 'Ynet',
+    topicId: 'security_attacks',
+    pubDate: new Date().toISOString()
+  });
+  assert.strictEqual(d2.isNew, false, 'שדרוג קלע דוד מוואלה ומ-Ynet חייב להתאחד לאירוע אחד');
+
+  const octClusters = [];
+  const o1 = deduplicator.processItem(octClusters, {
+    title: 'צה"ל והשב"כ חיסלו מפקדי נוח\'בה בהם מחבל שפלש לישראל ב-7 באוקטובר',
+    url: 'https://t.me/N12chat/1',
+    source: 'N12',
+    topicId: 'security_attacks',
+    pubDate: new Date().toISOString()
+  });
+  octClusters.push(o1.cluster);
+
+  const o2 = deduplicator.processItem(octClusters, {
+    title: 'מחבלים חוסלו בעזה, בהם אחד שחדר לישראל ב-7/10',
+    url: 'https://ynet.co.il/flashes/2',
+    source: 'Ynet',
+    topicId: 'security_attacks',
+    pubDate: new Date().toISOString()
+  });
+  assert.strictEqual(o2.isNew, false, 'חיסול מחבלים מה-7 באוקטובר מ-N12 ומ-Ynet חייב להתאחד לאירוע אחד');
+  console.log('✅ בדיקה 8 עברה: סיווג לפי ציון ואיחוד כותרות בהטיות שונות בעברית');
+}
+
+console.log('\n🎉 כל 8 בדיקות היחידה עברו בהצלחה מושלמת!');

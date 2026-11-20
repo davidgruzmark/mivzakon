@@ -29,7 +29,7 @@ export class NewsDeduplicator {
     }
 
     // אם יש לפחות 3 שורשים/מילות מפתח משמעותיות משותפות בכותרת (למשל: סמוטריץ', דובאי, טיסות)
-    if (sharedStems >= 3 && titleSim >= 0.25) {
+    if (sharedStems >= 3 && titleSim >= 0.22) {
       return true;
     }
 
@@ -67,9 +67,11 @@ export class NewsDeduplicator {
         continue;
       }
 
-      // בדיקה אם הקישור כבר שמור בדיוק באותו אשכול
-      const urlExists = cluster.sources.some(s => s.url === newItem.url);
-      if (urlExists) {
+      // בדיקה אם הקישור או אותו דיווח מאותו מקור כבר שמור באשכול
+      const alreadyExists = cluster.sources.some(
+        s => s.url === newItem.url || (s.sourceId && newItem.sourceId && s.sourceId === newItem.sourceId && s.title === newItem.title)
+      );
+      if (alreadyExists) {
         return { matched: true, cluster, isNew: false, alreadyRecorded: true };
       }
 

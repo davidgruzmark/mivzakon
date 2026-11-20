@@ -25,7 +25,7 @@ export const ISRAELI_NEWS_SOURCES = [
     name: 'ישראל היום',
     url: 'https://www.israelhayom.co.il/rss.xml',
     badgeColor: 'bg-orange-500/20 text-orange-300 border-orange-500/30',
-    enabled: true
+    enabled: false
   },
   {
     id: 'inn_flashes',

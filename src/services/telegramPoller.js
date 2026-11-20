@@ -40,7 +40,12 @@ export class TelegramPoller {
         const rawContent = match[2];
         const datetime = match[3];
 
-        const cleanText = stripAndDecodeHtml(rawContent).replace(/@\w+/g, '').trim();
+        // הסרת קרדיט כתב בתחילת הודעת טלגרם (למשל "<b>אסף רוזנצוייג</b><br>...")
+        const withoutCreditHtml = rawContent
+          .replace(/^\s*<(?:b|strong)>([^<]{2,28})<\/(?:b|strong)>\s*(?:<br\s*\/?>|\n|:|-)\s*/i, '')
+          .replace(/^\s*<(?:b|strong)>([^<]{2,28}):\s*<\/(?:b|strong)>\s*/i, '');
+
+        const cleanText = stripAndDecodeHtml(withoutCreditHtml).replace(/@\w+/g, '').trim();
         if (!cleanText || cleanText.length < 15) continue;
 
         // הכותרת היא המשפט הראשון או 70 התווים הראשונים

@@ -135,9 +135,11 @@ export class DatabaseService {
       if (cloudTopics.length > 0) {
         // טעינת כל הנתונים מהענן אל מסד הנתונים המקומי המהיר
         await this.pullFromCloud();
+        this.upgradeLegacyDefaultTopics();
         console.log(`☁️ [Database] סונכרנו מהענן: ${cloudTopics.length} נושאים וכל היסטוריית האירועים והמנויים.`);
       } else {
         // הענן ריק (הפעלה ראשונה) — דחיפת ברירות המחדל והנתונים הקיימים לענן
+        this.upgradeLegacyDefaultTopics();
         await this.pushAllToCloud();
         console.log('☁️ [Database] אתחול ראשוני: נושאי ברירת המחדל וההגדרות נשמרו בענן.');
       }
@@ -412,6 +414,31 @@ export class DatabaseService {
       if (clustersToSeed.length > 0) {
         this.saveClusters(clustersToSeed);
       }
+    }
+
+    this.upgradeLegacyDefaultTopics();
+  }
+
+  upgradeLegacyDefaultTopics() {
+    const legacyNoisyWords = new Set(['מתווה', 'צפון', 'ירי', 'דריסה', 'סכין', 'וושינגטון']);
+    const defaultMap = new Map(DEFAULT_TOPICS.map(t => [t.id, t]));
+    const currentTopics = this.getTopics();
+    let changed = false;
+
+    const updated = currentTopics.map(t => {
+      const def = defaultMap.get(t.id);
+      if (!def) return t;
+      const hasLegacyNoise = (t.keywords || []).some(k => legacyNoisyWords.has(k));
+      if (hasLegacyNoise) {
+        changed = true;
+        return { ...t, keywords: def.keywords };
+      }
+      return t;
+    });
+
+    if (changed) {
+      this.saveTopics(updated);
+      console.log('✨ [Database] שודרגו מילות מפתח של נושאי ברירת המחדל למניעת התראות שווא.');
     }
   }
 

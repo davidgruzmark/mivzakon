@@ -9,6 +9,25 @@ export const HEBREW_STOP_WORDS = new Set([
   'כבר', 'נגד', 'לפני', 'אחרי', 'תוך', 'אצל', 'סביב', 'יחד', 'בגלל', 'מפני', 'אודות'
 ]);
 
+// מיפוי הטיות ומילים נרדפות נפוצות בחדשות לצורת בסיס אחידה
+export const CANONICAL_SYNONYMS = {
+  'שדרגה': 'שדרוג',
+  'שודרג': 'שדרוג',
+  'שודרגה': 'שדרוג',
+  'חיסלו': 'חיסול',
+  'חיסל': 'חיסול',
+  'חוסל': 'חיסול',
+  'חוסלו': 'חיסול',
+  'יירטה': 'יירוט',
+  'יירטו': 'יירוט',
+  'יורט': 'יירוט',
+  'יורטו': 'יירוט',
+  'הותקף': 'תקיפה',
+  'תקפה': 'תקיפה',
+  'תקפו': 'תקיפה',
+  'תוקף': 'תקיפה'
+};
+
 // ניקוי ופיענוח תגיות HTML וישויות
 export function stripAndDecodeHtml(html) {
   if (!html) return '';
@@ -46,10 +65,33 @@ export function stripHebrewPrefix(word) {
   return word;
 }
 
+// הסרת סיומות רבים נפוצות בעברית (ים, ות)
+export function stripHebrewSuffix(word) {
+  if (!word || word.length < 5) return word;
+  if (word.endsWith('ים') || word.endsWith('ות')) {
+    const base = word.slice(0, -2);
+    if (base.length >= 3) return base;
+  }
+  return word;
+}
+
+// בדיקת הופעת מילת מפתח בגבולות מילה (כולל אותיות שימוש ורבים) למניעת התאמות שווא בתוך מילה אחרת
+export function containsHebrewKeyword(normalizedText, normalizedKeyword) {
+  if (!normalizedText || !normalizedKeyword) return false;
+  const escaped = normalizedKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const prefixes = '(?:ומ|וה|וב|ול|וכ|וש|מה|שה|ו|ה|ב|ל|מ|ש|כ)?';
+  const suffixes = normalizedKeyword.length >= 4 ? '(?:ים|ות)?' : '';
+  const regex = new RegExp(`(?:^|[^א-תa-z0-9])${prefixes}${escaped}${suffixes}(?=$|[^א-תa-z0-9])`, 'i');
+  return regex.test(normalizedText);
+}
+
 // ניקוי טקסט והפקת רשימת מילים משמעותיות + השורש שלהן
 export function tokenizeHebrew(text) {
   if (!text) return [];
-  const normalized = normalizeHebrewQuotes(text)
+  const preNormalized = normalizeHebrewQuotes(text)
+    .replace(/(?:[בה]-?\s*)?7(?:\s*באוקטובר|[./]10)(?=$|[^0-9])/g, ' 7אוקטובר ');
+
+  const normalized = preNormalized
     .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"'<>\[\]\\|]/g, ' ')
     .toLowerCase();
 
@@ -61,13 +103,20 @@ export function tokenizeHebrew(text) {
   return words;
 }
 
-// הפקת מילים עם קידומת מקולפת לצורך השוואה מורחבת
+// הפקת מילים עם קידומת/סיומת מקולפת ונרמול הטיות לצורך השוואה מורחבת
 export function getWordStems(tokens) {
   const stems = new Set();
   for (const token of tokens) {
-    stems.add(token);
-    const stripped = stripHebrewPrefix(token);
-    if (stripped) stems.add(stripped);
+    const canonical = CANONICAL_SYNONYMS[token] || token;
+    stems.add(canonical);
+
+    const noPrefix = stripHebrewPrefix(token);
+    const noSuffix = stripHebrewSuffix(noPrefix);
+    for (const candidate of [noPrefix, noSuffix]) {
+      if (candidate) {
+        stems.add(CANONICAL_SYNONYMS[candidate] || candidate);
+      }
+    }
   }
   return stems;
 }
