@@ -72,7 +72,20 @@ export class RssPoller {
     return null;
   }
 
+  isItemTooOld(pubDateIso, retentionHours = 48) {
+    if (!pubDateIso) return false;
+    const itemTime = new Date(pubDateIso).getTime();
+    if (Number.isNaN(itemTime)) return false;
+    const cutoffMs = retentionHours * 60 * 60 * 1000;
+    return (Date.now() - itemTime) > cutoffMs;
+  }
+
   handleIngestedItem(item, clusters, activeTopics, onNew, onDedup) {
+    const retentionHours = this.settings.retentionHours || 48;
+    if (this.isItemTooOld(item.pubDate, retentionHours)) {
+      return; // מתעלמים מידיעות ישנות מעל 48 שעות כדי שלא ייקלטו מחדש אחרי מחיקה אוטומטית
+    }
+
     const matchedTopic = this.matchTopic(item, activeTopics);
     if (!matchedTopic) return;
 
@@ -118,6 +131,9 @@ export class RssPoller {
     this.isPolling = true;
 
     try {
+      const retentionHours = this.settings.retentionHours || 48;
+      storage.pruneOldClusters(retentionHours);
+
       const activeTopics = storage.getTopics().filter(t => t.enabled);
       let clusters = storage.getClusters();
       let newAlertsThisRun = 0;

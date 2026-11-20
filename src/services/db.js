@@ -19,6 +19,7 @@ export class DatabaseService {
     this.db = new DatabaseSync(DB_FILE);
     this.pgPool = null;
     this.cloudConnected = false;
+    this.cloudError = null;
     this.initSchema();
     this.migrateFromLegacyJson();
   }
@@ -33,10 +34,21 @@ export class DatabaseService {
     return this.cloudConnected;
   }
 
+  getCloudStatus() {
+    const rawUrl = process.env.DATABASE_URL || '';
+    return {
+      connected: this.cloudConnected,
+      hasDatabaseUrl: Boolean(rawUrl.trim()),
+      error: this.cloudError,
+      retentionHours: this.getSettings().retentionHours || 48
+    };
+  }
+
   // חיבור וסנכרון מול מסד נתונים בענן (PostgreSQL - Render / Supabase / Neon)
   async initCloudSync() {
-    const dbUrl = process.env.DATABASE_URL;
+    const dbUrl = (process.env.DATABASE_URL || '').trim();
     if (!dbUrl) {
+      this.cloudError = 'משתנה הסביבה DATABASE_URL לא מוגדר בשרת';
       console.log('[Database] לא הוגדר DATABASE_URL — פועל על מסד נתונים מקומי (data/news.db).');
       return false;
     }
@@ -112,7 +124,11 @@ export class DatabaseService {
       `);
 
       this.cloudConnected = true;
+      this.cloudError = null;
       console.log('☁️ [Database] מחובר בהצלחה למסד נתונים קבוע בענן (PostgreSQL)!');
+
+      const retentionHours = this.getSettings().retentionHours || 48;
+      this.pruneOldClusters(retentionHours);
 
       // בדיקה האם יש כבר נתונים בענן
       const { rows: cloudTopics } = await this.pgPool.query('SELECT * FROM topics ORDER BY created_at ASC');
@@ -130,6 +146,7 @@ export class DatabaseService {
     } catch (err) {
       console.error('⚠️ [Database] שגיאה בחיבור למסד הנתונים בענן (ממשיך עם SQLite מקומי):', err.message);
       this.cloudConnected = false;
+      this.cloudError = err.message;
       return false;
     }
   }
@@ -175,8 +192,13 @@ export class DatabaseService {
       }
     }
 
-    // 4. Clusters & Sources
-    const { rows: clusters } = await this.pgPool.query('SELECT * FROM clusters ORDER BY first_reported_at DESC LIMIT 500');
+    // 4. Clusters & Sources (מסונן לחלון השמירה של 48 שעות אחורה)
+    const retentionHours = this.getSettings().retentionHours || 48;
+    const cutoffIso = new Date(Date.now() - retentionHours * 60 * 60 * 1000).toISOString();
+    const { rows: clusters } = await this.pgPool.query(
+      'SELECT * FROM clusters WHERE first_reported_at >= $1 ORDER BY first_reported_at DESC LIMIT 500',
+      [cutoffIso]
+    );
     const { rows: sources } = await this.pgPool.query('SELECT * FROM cluster_sources ORDER BY id ASC');
     if (clusters.length > 0) {
       this.db.prepare('DELETE FROM cluster_sources').run();
@@ -576,6 +598,40 @@ export class DatabaseService {
     return true;
   }
 
+  pruneOldClusters(retentionHours = 48) {
+    const cutoffIso = new Date(Date.now() - retentionHours * 60 * 60 * 1000).toISOString();
+
+    // 1. מחיקה ממסד הנתונים המקומי (SQLite)
+    this.db.prepare(`
+      DELETE FROM cluster_sources
+      WHERE cluster_id IN (SELECT id FROM clusters WHERE first_reported_at < ?)
+    `).run(cutoffIso);
+
+    const info = this.db.prepare(`
+      DELETE FROM clusters
+      WHERE first_reported_at < ?
+    `).run(cutoffIso);
+
+    const deletedCount = info.changes || 0;
+    if (deletedCount > 0) {
+      console.log(`🧹 [Database] ניקוי אוטומטי: נמחקו ${deletedCount} אירועים ישנים (מעל ${retentionHours} שעות).`);
+    }
+
+    // 2. מחיקה ממסד הנתונים בענן (PostgreSQL)
+    if (this.pgPool && this.cloudConnected) {
+      this.pgPool.query(
+        `DELETE FROM cluster_sources WHERE cluster_id IN (SELECT id FROM clusters WHERE first_reported_at < $1)`,
+        [cutoffIso]
+      ).then(() =>
+        this.pgPool.query(`DELETE FROM clusters WHERE first_reported_at < $1`, [cutoffIso])
+      ).catch(e => {
+        console.error('[Database Cloud Sync] שגיאה בניקוי אירועים ישנים בענן:', e.message);
+      });
+    }
+
+    return deletedCount;
+  }
+
   // === Settings ===
   getSettings() {
     const rows = this.db.prepare('SELECT * FROM settings').all();
@@ -583,6 +639,7 @@ export class DatabaseService {
       pollIntervalSeconds: 30,
       similarityThreshold: 0.30,
       timeWindowHours: 12,
+      retentionHours: 48,
       soundAlerts: true
     };
     for (const r of rows) {

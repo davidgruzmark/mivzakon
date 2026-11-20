@@ -130,6 +130,7 @@ app.get('/api/stats', (req, res) => {
   res.json({
     ...stats,
     cloudDbConnected: dbService.isCloudConnected(),
+    cloudDbStatus: dbService.getCloudStatus(),
     totalClustersCount: clusters.length,
     totalSourcesReported: clusters.reduce((acc, c) => acc + (c.sources ? c.sources.length : 0), 0)
   });

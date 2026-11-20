@@ -1,5 +1,7 @@
 import assert from 'node:assert';
 import { NewsDeduplicator } from '../src/services/deduplicator.js';
+import { RssPoller } from '../src/services/rssPoller.js';
+import { dbService } from '../src/services/db.js';
 import { calculateHebrewSimilarity, tokenizeHebrew, getWordStems } from '../src/utils/textProcessor.js';
 
 console.log('--- הרצת בדיקות מנוע Deduplication ו-Clustering לעברית ---');
@@ -129,4 +131,79 @@ const deduplicator = new NewsDeduplicator({ similarityThreshold: 0.30, timeWindo
   console.log('✅ בדיקה 4 עברה: כיבוד חלון הזמן למניעת איחוד חדשות ישנות');
 }
 
-console.log('\n🎉 כל 4 בדיקות היחידה עברו בהצלחה מושלמת!');
+// בדיקה 5: סינון ידיעות ישנות מעל 48 שעות בקליטה (מניעת חזרה של חדשות שנמחקו)
+{
+  const pollerInstance = new RssPoller();
+  const hours49Ago = new Date(Date.now() - 49 * 60 * 60 * 1000).toISOString();
+  const hours2Ago = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
+  assert.strictEqual(pollerInstance.isItemTooOld(hours49Ago, 48), true, 'ידיעה בת 49 שעות חייבת להיות מסוננת');
+  assert.strictEqual(pollerInstance.isItemTooOld(hours2Ago, 48), false, 'ידיעה בת שעתיים חייבת להתקבל');
+  assert.strictEqual(pollerInstance.isItemTooOld('', 48), false, 'ידיעה ללא תאריך לא נפסלת סתם');
+
+  const clusters = [];
+  let newCalls = 0;
+  pollerInstance.handleIngestedItem(
+    {
+      title: 'ידיעה ישנה על המלחמה וביטחון',
+      summary: 'דיווח ישן מלפני יותר מיומיים',
+      url: 'https://example.com/old-49h',
+      source: 'בדיקה',
+      sourceId: 'test',
+      pubDate: hours49Ago
+    },
+    clusters,
+    [{ id: 'security', title: 'ביטחון', keywords: ['ביטחון'], enabled: true }],
+    () => newCalls++,
+    () => {}
+  );
+  assert.strictEqual(newCalls, 0, 'handleIngestedItem לא אמורה לקלוט ידיעה בת מעל 48 שעות');
+  console.log('✅ בדיקה 5 עברה: סינון ידיעות ישנות מעל 48 שעות בעת קליטה');
+}
+
+// בדיקה 6: ניקוי אוטומטי מה-DB של אירועים מעל 48 שעות ושמירת אירועים חדשים
+{
+  const oldId = `test_old_${Date.now()}`;
+  const freshId = `test_fresh_${Date.now()}`;
+  const hours50Ago = new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString();
+  const hours1Ago = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+  dbService.saveClusters([
+    {
+      id: oldId,
+      topicId: 'test_topic',
+      topicTitle: 'בדיקה',
+      title: 'אירוע בדיקה ישן מעל 48 שעות',
+      summary: '',
+      firstReportedAt: hours50Ago,
+      lastUpdatedAt: hours50Ago,
+      alertSent: true,
+      sources: [{ title: 'ישן', url: `https://example.com/${oldId}`, source: 'בדיקה', sourceId: 'test', pubDate: hours50Ago }]
+    },
+    {
+      id: freshId,
+      topicId: 'test_topic',
+      topicTitle: 'בדיקה',
+      title: 'אירוע בדיקה טרי מהשעה האחרונה',
+      summary: '',
+      firstReportedAt: hours1Ago,
+      lastUpdatedAt: hours1Ago,
+      alertSent: true,
+      sources: [{ title: 'טרי', url: `https://example.com/${freshId}`, source: 'בדיקה', sourceId: 'test', pubDate: hours1Ago }]
+    }
+  ]);
+
+  dbService.pruneOldClusters(48);
+  const remainingIds = new Set(dbService.getClusters().map(c => c.id));
+  assert.strictEqual(remainingIds.has(oldId), false, 'אירוע בן 50 שעות חייב להימחק מה-DB');
+  assert.strictEqual(remainingIds.has(freshId), true, 'אירוע בן שעה חייב להישאר ב-DB');
+
+  // ניקוי רשומת הבדיקה הטרייה
+  dbService.deleteCluster(freshId);
+
+  const cloudStatus = dbService.getCloudStatus();
+  assert.strictEqual(cloudStatus.retentionHours, 48, 'מדיניות השמירה צריכה להיות 48 שעות');
+  console.log('✅ בדיקה 6 עברה: מחיקה אוטומטית מה-DB של אירועים מעל 48 שעות');
+}
+
+console.log('\n🎉 כל 6 בדיקות היחידה עברו בהצלחה מושלמת!');

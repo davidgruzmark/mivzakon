@@ -26,6 +26,10 @@ export class StorageService {
     return dbService.clearAllClusters();
   }
 
+  pruneOldClusters(retentionHours = 48) {
+    return dbService.pruneOldClusters(retentionHours);
+  }
+
   getSettings() {
     return dbService.getSettings();
   }
